@@ -1,0 +1,17 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Permite leitura e gravação para os usuários do TreinoPro
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+    
+    match /treinos/{treinoId} {
+      allow read, write: if true;
+    }
+    
+    match /historico_treinos/{logId} {
+      allow read, write: if true;
+    }
+  }
+}
