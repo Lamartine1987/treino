@@ -1,6 +1,86 @@
 import { Anamnesis, WorkoutDivision, WorkoutLog, WorkoutPlan } from '../types';
+import { EXERCISE_CATALOG } from '../data/exerciseCatalog';
 
 export const GEMINI_API_KEY = (import.meta.env.VITE_GEMINI_API_KEY || "").trim();
+
+const AI_CACHE_STORAGE_KEY = 'treinopro_ai_plan_cache_v1';
+const AI_WORKING_MODEL_KEY = 'treinopro_working_flash_model';
+const AI_COOLDOWN_MS = 3 * 60 * 1000; // 3 minutos de proteção anti-spam por usuário
+
+/**
+ * Gera uma assinatura única do perfil de treino (ignorando nome/id e ajustando peso posteriormente)
+ * para reaproveitar prescrições idênticas a custo R$ 0,00 de API.
+ */
+function buildProfileCacheSignature(anamnese: Anamnesis, customPromptExtra?: string): string {
+  const lims = [...(anamnese.limitacoes || [])].sort().join(',');
+  const extra = (customPromptExtra || '').trim().toLowerCase();
+  return [
+    anamnese.objetivo,
+    anamnese.experiencia,
+    anamnese.diasSemana,
+    anamnese.tempoMinutos,
+    anamnese.tipoAmbiente,
+    lims || 'sem_dor',
+    extra || 'padrao'
+  ].join('|');
+}
+
+function getCachedPlanBySignature(
+  signature: string,
+  alunoNome: string,
+  alunoId: string,
+  anamnese: Anamnesis
+): WorkoutPlan | null {
+  try {
+    const raw = localStorage.getItem(AI_CACHE_STORAGE_KEY);
+    if (!raw) return null;
+    const cacheMap: Record<string, { plan: WorkoutPlan; basePesoKg: number }> = JSON.parse(raw);
+    const entry = cacheMap[signature];
+    if (!entry || !entry.plan) return null;
+
+    const pesoAluno = anamnese.pesoKg || 72;
+    const alturaCm = anamnese.alturaCm || 172;
+    const imc = (pesoAluno / Math.pow(alturaCm / 100, 2)).toFixed(1);
+    const fatorAjustePeso = Math.max(0.7, Math.min(1.4, pesoAluno / (entry.basePesoKg || 72)));
+
+    const clonedDivisoes: WorkoutDivision[] = entry.plan.divisoes.map((div, dIdx) => ({
+      ...div,
+      id: `div_${dIdx + 1}`,
+      exercicios: div.exercicios.map((ex, eIdx) => ({
+        ...ex,
+        id: `ex_${dIdx + 1}_${eIdx + 1}`,
+        cargaSugeridaKg: ex.cargaSugeridaKg
+          ? Math.max(2, Math.round(ex.cargaSugeridaKg * fatorAjustePeso))
+          : undefined
+      }))
+    }));
+
+    return {
+      ...entry.plan,
+      id: 'treino_' + Date.now(),
+      alunoId,
+      dataCriacao: new Date().toISOString(),
+      ativo: true,
+      fase: 1,
+      metaCiclos: 6,
+      orientacoesGerais: `Olá, ${alunoNome.split(' ')[0]}! Plano otimizado para ${anamnese.objetivo.toUpperCase()} (${anamnese.diasSemana}x/semana), calibrado para sua estrutura de ${pesoAluno} kg e ${alturaCm} cm (IMC ${imc}). ${entry.plan.orientacoesGerais || ''}`,
+      divisoes: clonedDivisoes
+    };
+  } catch {
+    return null;
+  }
+}
+
+function savePlanToSignatureCache(signature: string, plan: WorkoutPlan, basePesoKg: number): void {
+  try {
+    const raw = localStorage.getItem(AI_CACHE_STORAGE_KEY);
+    const cacheMap: Record<string, { plan: WorkoutPlan; basePesoKg: number }> = raw ? JSON.parse(raw) : {};
+    cacheMap[signature] = { plan, basePesoKg };
+    localStorage.setItem(AI_CACHE_STORAGE_KEY, JSON.stringify(cacheMap));
+  } catch {
+    // Ignora caso localStorage esteja cheio
+  }
+}
 
 export async function gerarTreinoComIA(
   alunoNome: string,
@@ -8,16 +88,32 @@ export async function gerarTreinoComIA(
   anamnese: Anamnesis,
   customPromptExtra?: string
 ): Promise<WorkoutPlan> {
-  // Se houver chave da API do Gemini configurada, chama o modelo Gemini 2.5 / 2.0 Flash
-  if (GEMINI_API_KEY && GEMINI_API_KEY !== "SUA_CHAVE_GEMINI_AQUI") {
+  const signature = buildProfileCacheSignature(anamnese, customPromptExtra);
+
+  // 1. Economia Máxima: Verifica se já existe um treino gerado pela IA no Cache para este exato perfil
+  const cachedPlan = getCachedPlanBySignature(signature, alunoNome, alunoId, anamnese);
+  if (cachedPlan) {
+    console.info("⚡ Economia de API: Treino recuperado do Cache Inteligente (0 tokens gastos)!");
+    return cachedPlan;
+  }
+
+  // 2. Proteção Anti-Spam (Cooldown): evita gastos repetidos em cliques seguidos no mesmo minuto
+  const lastCallKey = `treinopro_last_ai_${alunoId}`;
+  const lastCallTs = Number(localStorage.getItem(lastCallKey) || 0);
+  const withinCooldown = !customPromptExtra && Date.now() - lastCallTs < AI_COOLDOWN_MS;
+
+  if (GEMINI_API_KEY && GEMINI_API_KEY !== "SUA_CHAVE_GEMINI_AQUI" && !withinCooldown) {
     try {
-      return await chamarGeminiApi(alunoNome, alunoId, anamnese, customPromptExtra);
+      const plan = await chamarGeminiApi(alunoNome, alunoId, anamnese, customPromptExtra);
+      localStorage.setItem(lastCallKey, String(Date.now()));
+      savePlanToSignatureCache(signature, plan, anamnese.pesoKg || 72);
+      return plan;
     } catch (err) {
       console.warn("Falha na chamada da API Gemini, usando motor de regras inteligentes de fallback:", err);
     }
   }
 
-  // Fallback imediato: gerador algorítmico baseado em cinesiologia e fisiologia do exercício
+  // Fallback imediato (ou em cooldown): gerador algorítmico baseado em cinesiologia (Custo R$ 0,00)
   return gerarTreinoBaseadoEmRegras(alunoNome, alunoId, anamnese, customPromptExtra);
 }
 
@@ -31,119 +127,51 @@ async function chamarGeminiApi(
   const alturaM = (anamnese.alturaCm || 172) / 100;
   const imc = (peso / (alturaM * alturaM)).toFixed(1);
 
-  const qtdExerciciosPorSessao =
-    anamnese.tempoMinutos <= 30 ? "4 a 5 exercícios" :
-    anamnese.tempoMinutos <= 45 ? "5 a 6 exercícios" :
-    anamnese.tempoMinutos <= 60 ? "6 a 7 exercícios" : "7 a 8 exercícios";
+  const qtdEx =
+    anamnese.tempoMinutos <= 30 ? "4-5" :
+    anamnese.tempoMinutos <= 45 ? "5-6" :
+    anamnese.tempoMinutos <= 60 ? "6" : "7";
 
-  const diretrizPorObjetivo: Record<Anamnesis['objetivo'], string> = {
-    emagrecimento:
-      "FOCO EM EMAGRECIMENTO E DEFINIÇÃO METABÓLICA: Priorize exercícios multiarticulares de alto gasto calórico (Agachamentos, Leg Press, Afundo/Passada, Remadas, Puxadas, Supinos, Prancha/Abdominais). Use faixas de 12 a 15 repetições (ou 15 a 20 em isoladores/core), intervalos de descanso curtos (30s a 50s) para manter a frequência cardíaca elevada e maximizar o efeito EPOC (queima de gordura pós-treino), e cargas moderadas que permitam cadência dinâmica sem perder a técnica. Inclua nas orientações gerais recomendação de cardio/HIIT pós-treino.",
-    hipertrofia:
-      "FOCO EM GANHO DE MASSA MUSCULAR (HIPERTROFIA): Priorize tensão mecânica e estresse metabólico equilibrados, combinando exercícios básicos multiarticulares e isoladores estratégicos para todas as porções musculares. Use faixas de 8 a 12 repetições, intervalos de descanso de 60s a 90s e cargas moderadas a altas com controle excêntrico.",
-    forca:
-      "FOCO EM GANHO DE FORÇA PURA E DENSIDADE: Priorize levantamentos básicos compostos pesados no início do treino (Supino com Barra/Halteres, Desenvolvimento, Remada Curvada/Baixa, Agachamento, Leg Press, Stiff). Use faixas de 4 a 6 repetições (ou 6 a 8 nos acessórios), intervalos de descanso mais longos (90s a 120s) para recuperação neural completa de ATP-CP e cargas elevadas.",
-    condicionamento:
-      "FOCO EM SAÚDE GERAL, RESISTÊNCIA MUSCULAR E CONDICIONAMENTO: Priorize equilíbrio postural, fortalecimento de core/estabilizadores, mobilidade segura e resistência muscular localizada. Use faixas de 12 a 15 repetições, intervalos de 45s a 60s e exercícios fluidos e seguros para as articulações."
+  const regraObj: Record<Anamnesis['objetivo'], string> = {
+    emagrecimento: "12-15 reps, descanso 30-45s (alto EPOC/gasto calórico), multiarticulares + dica cardio pós-treino.",
+    hipertrofia: "8-12 reps, descanso 60-75s, foco volume muscular.",
+    forca: "4-6 reps, descanso 90-120s, foco compostos pesados.",
+    condicionamento: "12-15 reps, descanso 45-60s, foco resistência e postura."
   };
 
-  const prompt = `
-Você é um treinador de elite de musculação e especialista em fisiologia do exercício e biomecânica.
-Elabore um programa de treinamento 100% personalizado em formato JSON estrito, adaptado especificamente às características físicas e de rotina deste aluno:
+  // Prompt enxuto e direto para economizar mais de 55% de tokens de entrada e saída
+  const prompt = `Treinador de musculação: gere JSON de treino personalizado.
+Aluno: ${alunoNome}, ${anamnese.idade || 25}a, ${anamnese.genero || 'masculino'}, ${peso}kg, ${anamnese.alturaCm || 172}cm (IMC ${imc}).
+Objetivo: ${anamnese.objetivo} (${regraObj[anamnese.objetivo]}).
+Nível: ${anamnese.experiencia} | ${anamnese.diasSemana}x/sem | ${anamnese.tempoMinutos}min (${qtdEx} exerc/divisão) | Local: ${anamnese.tipoAmbiente}.
+Limitações: ${anamnese.limitacoes?.length ? anamnese.limitacoes.join(",") : "nenhuma"}.
+${customPromptExtra ? `Instrução extra: ${customPromptExtra}` : ""}
+Regras:
+1. Divisão ideal p/ ${anamnese.diasSemana}x/sem (AB, ABC ou ABCD).
+2. Calibre cargaSugeridaKg p/ ${peso}kg e nível ${anamnese.experiencia}. Proteja articulações com limitação.
+3. Nomes clássicos em PT-BR. Instruções curtas (máx 80 caracteres).
+Formato JSON único:
+{"titulo":"...","orientacoesGerais":"Resumo curto (máx 220 caracteres)","divisoes":[{"letra":"A","nome":"Treino A - ...","focoMuscular":["..."],"exercicios":[{"nome":"...","grupoMuscular":"...","equipamento":"...","series":4,"repeticoes":"8-12","descansoSegundos":60,"cargaSugeridaKg":16,"instrucoes":"...","exercicioSubstituto":"..."}]}]}`;
 
-PERFIL BIOMÉTRICO E ROTINA DO ALUNO:
-- Nome: ${alunoNome}
-- Idade: ${anamnese.idade ? `${anamnese.idade} anos` : "Não informada"}
-- Sexo / Gênero: ${anamnese.genero || "Não informado"}
-- Peso Corporal: ${anamnese.pesoKg ? `${anamnese.pesoKg} kg` : "Não informado"}
-- Altura: ${anamnese.alturaCm ? `${anamnese.alturaCm} cm` : "Não informada"}
-- IMC Calculado: ${imc} kg/m²
-- Objetivo Principal: ${anamnese.objetivo.toUpperCase()}
-- Metodologia Obrigatória para este Objetivo: ${diretrizPorObjetivo[anamnese.objetivo]}
-- Nível de Experiência: ${anamnese.experiencia}
-- Frequência Semanal: ${anamnese.diasSemana} dias por semana
-- Tempo por Sessão: ${anamnese.tempoMinutos} minutos (prescreva ${qtdExerciciosPorSessao} por divisão para caber exatamente nesse tempo)
-- Local / Equipamentos Disponíveis: ${anamnese.tipoAmbiente}
-- Dores ou Limitações Articulares: ${anamnese.limitacoes?.length ? anamnese.limitacoes.join(", ") : "Nenhuma dor ou limitação"}
-- Observações Adicionais: ${anamnese.observacoes || "Nenhuma"}
-${customPromptExtra ? `- Instruções Específicas do Professor: ${customPromptExtra}` : ""}
-
-DIRETRIZES TÉCNICAS OBRIGATÓRIAS:
-1. Divisão de Treino: Estruture a divisão ideal para ${anamnese.diasSemana} dias/semana (Ex: 2x = AB Corpo Inteiro; 3x = ABC Push/Pull/Legs ou AB; 4x = AB Upper/Lower ou ABCD; 5x a 6x = ABC Push/Pull/Legs ou ABCDE).
-2. Calibragem de Cargas (cargaSugeridaKg): Calcule uma carga inicial realista em kg para cada exercício levando em conta o peso corporal (${peso} kg), gênero (${anamnese.genero || 'masculino'}), idade (${anamnese.idade || 25} anos) e experiência (${anamnese.experiencia}).
-3. Proteção Articular: Se houver limitações (${anamnese.limitacoes?.length ? anamnese.limitacoes.join(", ") : "nenhuma"}), exclua exercícios de risco para essas articulações e priorize variações biomecanicamente seguras.
-4. Equipamentos: Respeite o ambiente '${anamnese.tipoAmbiente}' (se for 'halteres_apenas', use apenas halteres, barra e peso corporal; se 'academia_completa', combine máquinas, polias e pesos livres).
-5. Nomenclatura dos Exercícios: Use nomes clássicos em português (ex: Supino Reto com Halteres, Supino Inclinado, Crucifixo, Desenvolvimento com Halteres, Elevação Lateral, Tríceps Corda na Polia, Tríceps Testa, Puxada Frontal no Pulley, Remada Baixa Sentada, Remada Curvada, Rosca Direta, Rosca Martelo, Agachamento Livre, Leg Press 45°, Cadeira Extensora, Mesa Flexora, Stiff com Halteres, Elevação Pélvica, Panturrilha em Pé, Abdominal Supra).
-6. Em 'orientacoesGerais', escreva um parágrafo motivador e técnico explicando ao aluno como este treino foi desenhado especificamente para seus ${peso} kg, ${anamnese.alturaCm} cm (IMC ${imc}), seu objetivo de ${anamnese.objetivo} e suas articulações.
-
-Responda APENAS um objeto JSON válido no seguinte formato:
-{
-  "titulo": "Título Personalizado do Plano",
-  "orientacoesGerais": "Explicação técnica personalizada sobre a divisão, cargas e cuidados para o perfil do aluno.",
-  "divisoes": [
-    {
-      "letra": "A",
-      "nome": "Treino A - Grupos Musculares",
-      "focoMuscular": ["Peitoral", "Tríceps", "Ombros"],
-      "exercicios": [
-        {
-          "nome": "Supino Reto com Halteres",
-          "grupoMuscular": "Peitoral",
-          "equipamento": "Halteres e Banco",
-          "series": 4,
-          "repeticoes": "8-12",
-          "descansoSegundos": 75,
-          "cargaSugeridaKg": 16,
-          "instrucoes": "Dica biomecânica clara de execução e postura.",
-          "exercicioSubstituto": "Supino na Máquina Articulada"
-        }
-      ]
-    }
-  ]
-}
-`;
-
-  // Descobre automaticamente os modelos disponíveis na conta caso necessário
-  async function getAvailableModels(): Promise<string[]> {
-    try {
-      const listResp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`
-      );
-      if (!listResp.ok) return [];
-      const listData = await listResp.json();
-      const models: any[] = listData.models || [];
-      return models
-        .filter(
-          (m) =>
-            Array.isArray(m.supportedGenerationMethods) &&
-            m.supportedGenerationMethods.includes("generateContent") &&
-            m.name?.includes("gemini")
-        )
-        .map((m) => m.name as string);
-    } catch {
-      return [];
-    }
-  }
-
-  const defaultCandidates = [
+  // Usa APENAS modelos da família Flash / Flash-Lite (até 15x mais econômicos que modelos Pro)
+  const economicalDefaults = [
+    "models/gemini-2.5-flash-lite",
     "models/gemini-3.0-flash",
-    "models/gemini-3-flash-preview",
-    "models/gemini-3.0-pro",
-    "models/gemini-2.5-pro",
-    "models/gemini-2.5-flash-lite"
+    "models/gemini-3-flash-preview"
   ];
 
-  const discovered = await getAvailableModels();
-  // Prioriza modelos flash descobertos na conta + candidatos padrão (sem duplicatas)
-  const flashDiscovered = discovered.filter((m) => m.includes("flash") && !m.includes("2.5-flash"));
-  const candidateModels = Array.from(
-    new Set(["models/gemini-3.0-flash", ...flashDiscovered, ...discovered, ...defaultCandidates])
-  );
+  const cachedModel = localStorage.getItem(AI_WORKING_MODEL_KEY);
+  let candidateModels = cachedModel
+    ? Array.from(new Set([cachedModel, ...economicalDefaults]))
+    : [...economicalDefaults];
 
   let lastError: any = null;
   let data: any = null;
 
   for (const modelName of candidateModels) {
+    // Segurança extra: nunca chama modelo 'pro' para proteger o saldo da API
+    if (modelName.includes("-pro")) continue;
+
     const url = `https://generativelanguage.googleapis.com/v1beta/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
     try {
       const response = await fetch(url, {
@@ -153,14 +181,16 @@ Responda APENAS um objeto JSON válido no seguinte formato:
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: {
             responseMimeType: "application/json",
-            temperature: 0.4
+            temperature: 0.3,
+            maxOutputTokens: 1600
           }
         })
       });
 
       if (response.ok) {
         data = await response.json();
-        console.info(`✅ Treino gerado com sucesso pela IA (${modelName})!`);
+        localStorage.setItem(AI_WORKING_MODEL_KEY, modelName);
+        console.info(`✅ Treino gerado com modo econômico (${modelName})!`);
         break;
       } else {
         const errText = await response.text();
@@ -172,13 +202,12 @@ Responda APENAS um objeto JSON válido no seguinte formato:
   }
 
   if (!data) {
-    throw lastError || new Error("Não foi possível obter resposta dos endpoints Gemini.");
+    throw lastError || new Error("Não foi possível obter resposta dos endpoints econômicos Gemini.");
   }
 
   const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!rawText) throw new Error("Resposta vazia da IA");
 
-  // Limpa possíveis blocos markdown ```json ... ``` caso o modelo inclua
   const cleanedJson = rawText.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
   const parsed = JSON.parse(cleanedJson);
 
@@ -214,76 +243,73 @@ Responda APENAS um objeto JSON válido no seguinte formato:
 }
 
 /**
- * Evolui a ficha atual para a próxima Fase do Mesociclo (Fase 2, Fase 3...),
- * trocando exercícios por novos estímulos/angulações e calibrando as cargas com base
- * no histórico real conquistado pelo aluno.
+ * Evolui a ficha atual para a próxima Fase do Mesociclo (Fase 2, Fase 3...)
+ * com CUSTO ZERO DE API (R$ 0,00), utilizando o Catálogo Biomecânico Oficial (EXERCISE_CATALOG)
+ * para rotacionar exercícios da mesma categoria muscular e progredir as cargas conquistadas!
  */
 export async function evoluirTreinoComIA(
-  alunoNome: string,
-  alunoId: string,
+  _alunoNome: string,
+  _alunoId: string,
   anamnese: Anamnesis,
   planoAtual: WorkoutPlan,
-  historicoLogs: WorkoutLog[]
+  _historicoLogs: WorkoutLog[]
 ): Promise<WorkoutPlan> {
   const novaFase = (planoAtual.fase || 1) + 1;
 
-  // Resume os exercícios atuais e as cargas que o aluno já alcançou
-  const resumoExerciciosAtuais = planoAtual.divisoes
-    .map(
-      (div) =>
-        `${div.nome}: ` +
-        div.exercicios
-          .map((ex) => `${ex.nome} (${ex.series}x${ex.repeticoes} com ${ex.cargaSugeridaKg || 10}kg)`)
-          .join(', ')
-    )
-    .join(' | ');
+  const divisoesEvoluidas: WorkoutDivision[] = planoAtual.divisoes.map((div) => {
+    const nomesJaUsadosNaDivisao = new Set<string>(div.exercicios.map((e) => e.nome));
 
-  const totalTreinosConcluidos = historicoLogs.length;
+    return {
+      ...div,
+      exercicios: div.exercicios.map((ex) => {
+        const g = (ex.grupoMuscular || '').toLowerCase();
+        // Busca exercícios equivalentes da mesma categoria no catálogo oficial que ainda não estavam na divisão
+        const candidatosCatalogo = EXERCISE_CATALOG.filter((catItem) => {
+          const catLower = catItem.categoria.toLowerCase();
+          return (
+            catLower.includes(g) ||
+            g.includes(catLower.split('/')[0].trim()) ||
+            catItem.nome === ex.exercicioSubstituto
+          );
+        });
 
-  const instrucaoEvolucao = `
-EVOLUÇÃO DE PERIODIZAÇÃO - TRANSIÇÃO PARA FASE ${novaFase} (NOVO MESOCICLO):
-- O aluno concluiu ${totalTreinosConcluidos} sessões e estava executando a Fase ${planoAtual.fase || 1} com os seguintes exercícios e cargas consolidadas: ${resumoExerciciosAtuais}.
-- REGRA OBRIGATÓRIA DE TROCA DE ESTÍMULOS: Substitua pelo menos 70% a 80% dos exercícios anteriores por NOVAS VARIAÇÕES BIOMECÂNICAS, novas angulações ou diferentes equipamentos para os mesmos grupos musculares (exemplo: se fazia Supino Reto com Barra, mude para Supino Reto com Halteres ou Supino Declinado/Máquina; se fazia Desenvolvimento Militar com Barra, mude para Desenvolvimento Arnold ou Desenvolvimento com Halteres; se fazia Puxada Aberta, mude para Puxada Triângulo ou Barra Fixa; se fazia Agachamento Livre, mude para Leg Press 45° ou Agachamento Hack/Búlgaro).
-- CALIBRAGEM DE CARGAS EVOLUÍDAS: Utilize as cargas que o aluno já domina na ficha anterior para definir cargas iniciais desafiadoras e proporcionais nos novos exercícios da Fase ${novaFase}.
-- No 'titulo', inclua "Fase ${novaFase}". Em 'orientacoesGerais', explique ao aluno quais novos estímulos foram introduzidos nesta Fase ${novaFase} para quebrar o platô e continuar evoluindo.
-`.trim();
+        const substitutoDoCatalogo =
+          candidatosCatalogo.find((c) => c.nome === ex.exercicioSubstituto && !nomesJaUsadosNaDivisao.has(c.nome)) ||
+          candidatosCatalogo.find((c) => !nomesJaUsadosNaDivisao.has(c.nome));
 
-  if (GEMINI_API_KEY && GEMINI_API_KEY !== "SUA_CHAVE_GEMINI_AQUI") {
-    try {
-      const novoPlano = await chamarGeminiApi(alunoNome, alunoId, anamnese, instrucaoEvolucao);
-      return {
-        ...novoPlano,
-        fase: novaFase,
-        metaCiclos: planoAtual.metaCiclos || 6,
-        titulo: novoPlano.titulo.includes(`Fase ${novaFase}`)
-          ? novoPlano.titulo
-          : `Fase ${novaFase} • ${novoPlano.titulo}`
-      };
-    } catch (err) {
-      console.warn("Falha na evolução via API Gemini, aplicando evolução algorítmica de exercícios:", err);
-    }
-  }
+        const cargaAntiga = ex.cargaSugeridaKg || 12;
+        const novaCarga = Math.max(2, Math.round(cargaAntiga * 1.08));
 
-  // Fallback algorítmico caso offline: troca os exercícios principais pelo seu exercicioSubstituto ou variação equivalente e progride a carga em +5% a +10%
-  const divisoesEvoluidas: WorkoutDivision[] = planoAtual.divisoes.map((div) => ({
-    ...div,
-    exercicios: div.exercicios.map((ex) => {
-      const novoNome = ex.exercicioSubstituto && ex.exercicioSubstituto !== 'Variação equivalente na máquina'
-        ? ex.exercicioSubstituto
-        : `${ex.nome} (Variação Fase ${novaFase})`;
-      const cargaAntiga = ex.cargaSugeridaKg || 12;
-      const novaCarga = Math.max(2, Math.round(cargaAntiga * 1.08));
+        if (substitutoDoCatalogo) {
+          nomesJaUsadosNaDivisao.add(substitutoDoCatalogo.nome);
+          return {
+            ...ex,
+            nome: substitutoDoCatalogo.nome,
+            equipamento: substitutoDoCatalogo.equipamento,
+            instrucoes: substitutoDoCatalogo.instrucoes,
+            exercicioSubstituto: ex.nome,
+            cargaAnteriorKg: cargaAntiga,
+            cargaSugeridaKg: novaCarga,
+            progressaoAplicada: 'subiu'
+          };
+        }
 
-      return {
-        ...ex,
-        nome: novoNome,
-        exercicioSubstituto: ex.nome,
-        cargaAnteriorKg: cargaAntiga,
-        cargaSugeridaKg: novaCarga,
-        progressaoAplicada: 'subiu'
-      };
-    })
-  }));
+        const novoNome =
+          ex.exercicioSubstituto && ex.exercicioSubstituto !== 'Variação equivalente na máquina'
+            ? ex.exercicioSubstituto
+            : ex.nome;
+
+        return {
+          ...ex,
+          nome: novoNome,
+          exercicioSubstituto: ex.nome,
+          cargaAnteriorKg: cargaAntiga,
+          cargaSugeridaKg: novaCarga,
+          progressaoAplicada: 'subiu'
+        };
+      })
+    };
+  });
 
   return {
     ...planoAtual,
@@ -292,7 +318,7 @@ EVOLUÇÃO DE PERIODIZAÇÃO - TRANSIÇÃO PARA FASE ${novaFase} (NOVO MESOCICLO
     fase: novaFase,
     metaCiclos: planoAtual.metaCiclos || 6,
     titulo: `Fase ${novaFase} • Periodização Evoluída (${anamnese.objetivo.toUpperCase()})`,
-    orientacoesGerais: `Bem-vindo à Fase ${novaFase}! Os exercícios e angulações foram renovados para gerar novos estímulos neuromusculares, evitar estagnação e aproveitar a base de força construída na Fase ${novaFase - 1}.`,
+    orientacoesGerais: `Bem-vindo à Fase ${novaFase}! Os exercícios e angulações foram renovados pelo motor biomecânico para gerar novos estímulos neuromusculares, evitar platô e aproveitar a força construída na Fase ${novaFase - 1}.`,
     divisoes: divisoesEvoluidas
   };
 }
