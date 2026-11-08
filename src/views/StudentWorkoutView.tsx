@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { WorkoutDivision, WorkoutPlan, CompletedSet, WorkoutLog } from '../types';
+import { WorkoutDivision, WorkoutPlan, CompletedSet, WorkoutLog, ExerciseDifficulty, Exercise } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { ExerciseCard } from '../components/ExerciseCard';
 import { RestTimer } from '../components/RestTimer';
@@ -10,7 +10,6 @@ import {
   Clock, 
   CheckCircle, 
   Trophy, 
-  Smile, 
   Flame, 
   ThumbsUp, 
   ThumbsDown, 
@@ -40,11 +39,72 @@ export const StudentWorkoutView: React.FC<StudentWorkoutViewProps> = ({
   const [timerOpen, setTimerOpen] = useState(false);
   const [timerSeconds, setTimerSeconds] = useState(60);
 
-  // Modal de Conclusão de Treino
+  // Modal de Conclusão de Treino e Avaliação por Exercício
   const [showFinishModal, setShowFinishModal] = useState(false);
-  const [feedback, setFeedback] = useState<'muito_facil' | 'ideal' | 'muito_pesado'>('ideal');
+  const [exerciseFeedbacks, setExerciseFeedbacks] = useState<Record<string, ExerciseDifficulty>>({});
   const [observation, setObservation] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const handleSetExerciseDifficulty = (exerciseId: string, diff: ExerciseDifficulty) => {
+    setExerciseFeedbacks(prev => ({
+      ...prev,
+      [exerciseId]: diff
+    }));
+  };
+
+  // Calcula a nova carga sugerida para um exercício específico com base na dificuldade que o aluno sentiu nele
+  const calcularNovaCargaExercicio = (ex: Exercise, diff: ExerciseDifficulty) => {
+    const setsFeitos = completedSets.filter(
+      (s) => s.exerciseId === ex.id && s.concluido && s.pesoKg > 0
+    );
+
+    const cargaAtual = ex.cargaSugeridaKg || 10;
+    const maxPesoLevantado =
+      setsFeitos.length > 0
+        ? Math.max(...setsFeitos.map((s) => s.pesoKg))
+        : cargaAtual;
+
+    const nomeLower = ex.nome.toLowerCase();
+    const isMultiarticularPesado =
+      nomeLower.includes('agachamento') ||
+      nomeLower.includes('leg press') ||
+      nomeLower.includes('hack') ||
+      nomeLower.includes('stiff') ||
+      nomeLower.includes('terra') ||
+      nomeLower.includes('elevação pélvica') ||
+      nomeLower.includes('supino') ||
+      nomeLower.includes('puxada') ||
+      nomeLower.includes('remada');
+
+    let novaCarga = maxPesoLevantado;
+    let statusProgressao: 'subiu' | 'manteve' | 'reduziu' = 'manteve';
+
+    if (diff === 'muito_facil') {
+      const incremento = isMultiarticularPesado
+        ? maxPesoLevantado >= 30 ? 4 : 2
+        : maxPesoLevantado >= 14 ? 2 : 1;
+      novaCarga = maxPesoLevantado + incremento;
+      statusProgressao = 'subiu';
+    } else if (diff === 'ideal') {
+      if (maxPesoLevantado > cargaAtual) {
+        novaCarga = maxPesoLevantado;
+        statusProgressao = 'subiu';
+      } else if (setsFeitos.length >= ex.series) {
+        const incremento = isMultiarticularPesado ? 2 : 1;
+        novaCarga = maxPesoLevantado + incremento;
+        statusProgressao = 'subiu';
+      } else {
+        novaCarga = maxPesoLevantado;
+        statusProgressao = 'manteve';
+      }
+    } else if (diff === 'muito_pesado') {
+      const reducao = isMultiarticularPesado ? 2 : 1;
+      novaCarga = Math.max(2, maxPesoLevantado - reducao);
+      statusProgressao = novaCarga < cargaAtual ? 'reduziu' : 'manteve';
+    }
+
+    return { cargaAtual, novaCarga, statusProgressao };
+  };
 
   // Cronômetro da sessão geral
   useEffect(() => {
@@ -93,6 +153,17 @@ export const StudentWorkoutView: React.FC<StudentWorkoutViewProps> = ({
   };
 
   const handleOpenFinish = () => {
+    // Preenche com 'ideal' qualquer exercício que o aluno ainda não tenha avaliado individualmente
+    setExerciseFeedbacks(prev => {
+      const next = { ...prev };
+      division.exercicios.forEach(ex => {
+        if (!next[ex.id]) {
+          next[ex.id] = 'ideal';
+        }
+      });
+      return next;
+    });
+
     confetti({
       particleCount: 100,
       spread: 70,
@@ -105,6 +176,49 @@ export const StudentWorkoutView: React.FC<StudentWorkoutViewProps> = ({
     if (!user) return;
     setSaving(true);
 
+    const feedbackMapaLog: NonNullable<WorkoutLog['feedbackPorExercicio']> = {};
+
+    // Aplica Sobrecarga Progressiva Individual por Exercício para a próxima volta do ciclo
+    const updatedDivisoes = plan.divisoes.map((div) => {
+      if (div.id !== division.id) return div;
+
+      const updatedExercicios = div.exercicios.map((ex) => {
+        const diffEx: ExerciseDifficulty = exerciseFeedbacks[ex.id] || 'ideal';
+        const { cargaAtual, novaCarga, statusProgressao } = calcularNovaCargaExercicio(ex, diffEx);
+
+        feedbackMapaLog[ex.id] = {
+          nome: ex.nome,
+          dificuldade: diffEx,
+          cargaAnteriorKg: cargaAtual,
+          novaCargaKg: novaCarga
+        };
+
+        return {
+          ...ex,
+          cargaAnteriorKg: cargaAtual,
+          cargaSugeridaKg: novaCarga,
+          progressaoAplicada: statusProgressao,
+          ultimoFeedback: diffEx
+        };
+      });
+
+      return {
+        ...div,
+        exercicios: updatedExercicios
+      };
+    });
+
+    // Calcula um feedback geral resumido apenas para compatibilidade
+    const diffsValues = Object.values(feedbackMapaLog).map(v => v.dificuldade);
+    const qtdPesado = diffsValues.filter(d => d === 'muito_pesado').length;
+    const qtdFacil = diffsValues.filter(d => d === 'muito_facil').length;
+    const feedbackGeral: ExerciseDifficulty =
+      qtdPesado > diffsValues.length / 2
+        ? 'muito_pesado'
+        : qtdFacil > diffsValues.length / 2
+        ? 'muito_facil'
+        : 'ideal';
+
     const log: WorkoutLog = {
       id: 'log_' + Date.now(),
       alunoId: user.id,
@@ -114,81 +228,11 @@ export const StudentWorkoutView: React.FC<StudentWorkoutViewProps> = ({
       dataInicio: startTime.toISOString(),
       dataFim: new Date().toISOString(),
       duracaoMinutos: Math.max(1, Math.round(elapsedSeconds / 60)),
-      feedback,
+      feedback: feedbackGeral,
+      feedbackPorExercicio: feedbackMapaLog,
       observacaoAluno: observation,
       seriesConcluidas: completedSets
     };
-
-    // Aplica Sobrecarga Progressiva Automática nas cargas da divisão concluída para a próxima volta do ciclo
-    const updatedDivisoes = plan.divisoes.map((div) => {
-      if (div.id !== division.id) return div;
-
-      const updatedExercicios = div.exercicios.map((ex) => {
-        const setsFeitos = completedSets.filter(
-          (s) => s.exerciseId === ex.id && s.concluido && s.pesoKg > 0
-        );
-
-        const cargaAtual = ex.cargaSugeridaKg || 10;
-        const maxPesoLevantado =
-          setsFeitos.length > 0
-            ? Math.max(...setsFeitos.map((s) => s.pesoKg))
-            : cargaAtual;
-
-        const nomeLower = ex.nome.toLowerCase();
-        const isMultiarticularPesado =
-          nomeLower.includes('agachamento') ||
-          nomeLower.includes('leg press') ||
-          nomeLower.includes('hack') ||
-          nomeLower.includes('stiff') ||
-          nomeLower.includes('terra') ||
-          nomeLower.includes('elevação pélvica') ||
-          nomeLower.includes('supino') ||
-          nomeLower.includes('puxada') ||
-          nomeLower.includes('remada');
-
-        let novaCarga = maxPesoLevantado;
-        let statusProgressao: 'subiu' | 'manteve' | 'reduziu' = 'manteve';
-
-        if (feedback === 'muito_facil') {
-          // Treino foi sentido como leve -> sobe carga de forma expressiva para o próximo ciclo
-          const incremento = isMultiarticularPesado
-            ? maxPesoLevantado >= 30 ? 4 : 2
-            : maxPesoLevantado >= 14 ? 2 : 1;
-          novaCarga = maxPesoLevantado + incremento;
-          statusProgressao = 'subiu';
-        } else if (feedback === 'ideal') {
-          // Treino na medida -> se completou todas as séries previstas ou já subiu peso manualmente, aplica micro-progressão
-          if (maxPesoLevantado > cargaAtual) {
-            novaCarga = maxPesoLevantado;
-            statusProgressao = 'subiu';
-          } else if (setsFeitos.length >= ex.series) {
-            const incremento = isMultiarticularPesado ? 2 : 1;
-            novaCarga = maxPesoLevantado + incremento;
-            statusProgressao = 'subiu';
-          } else {
-            novaCarga = maxPesoLevantado;
-            statusProgressao = 'manteve';
-          }
-        } else if (feedback === 'muito_pesado') {
-          // Treino muito pesado -> reduz levemente para consolidar a execução com segurança no próximo ciclo
-          const reducao = isMultiarticularPesado ? 2 : 1;
-          novaCarga = Math.max(2, maxPesoLevantado - reducao);
-          statusProgressao = novaCarga < cargaAtual ? 'reduziu' : 'manteve';
-        }
-
-        return {
-          ...ex,
-          cargaAnteriorKg: cargaAtual,
-          cargaSugeridaKg: novaCarga,
-          progressaoAplicada: statusProgressao
-        };
-      });
-
-      return {
-        ...div,
-        exercicios: updatedExercicios
-      };
-    });
 
     const updatedPlan: WorkoutPlan = {
       ...plan,
@@ -265,6 +309,8 @@ export const StudentWorkoutView: React.FC<StudentWorkoutViewProps> = ({
             exercise={exercise}
             exerciseIndex={index}
             completedSets={completedSets}
+            difficulty={exerciseFeedbacks[exercise.id]}
+            onChangeDifficulty={(diff) => handleSetExerciseDifficulty(exercise.id, diff)}
             onToggleSet={(setIndex, weight, reps) => 
               handleToggleSet(exercise.id, setIndex, weight, reps)
             }
@@ -297,55 +343,84 @@ export const StudentWorkoutView: React.FC<StudentWorkoutViewProps> = ({
         onClose={() => setTimerOpen(false)}
       />
 
-      {/* Modal de Conclusão / Feedback Pós-Treino */}
+      {/* Modal de Conclusão / Feedback Individual por Exercício */}
       {showFinishModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl text-center animate-in zoom-in-95 duration-200">
-            <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-4 border border-emerald-500/30">
-              <Trophy className="w-8 h-8 fill-current" />
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl text-center animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-3 border border-emerald-500/30">
+              <Trophy className="w-7 h-7 fill-current" />
             </div>
 
-            <h3 className="text-xl font-extrabold text-white">Treino Finalizado com Sucesso!</h3>
+            <h3 className="text-lg sm:text-xl font-extrabold text-white">Treino Finalizado com Sucesso!</h3>
             <p className="text-xs text-slate-400 mt-1">
-              Duração total de <strong className="text-white">{Math.round(elapsedSeconds / 60)} minutos</strong> e <strong className="text-white">{totalCompletedSets} séries</strong> completas.
+              Duração de <strong className="text-white">{Math.max(1, Math.round(elapsedSeconds / 60))} min</strong> e <strong className="text-white">{totalCompletedSets} séries</strong> completas.
             </p>
 
-            <div className="mt-6 text-left">
-              <label className="text-xs font-bold text-slate-300 block mb-2">
-                Como você sentiu a intensidade do treino de hoje?
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { id: 'muito_facil', label: 'Leve', icon: ThumbsDown },
-                  { id: 'ideal', label: 'Na Medida', icon: ThumbsUp },
-                  { id: 'muito_pesado', label: 'Muito Pesado', icon: Flame }
-                ].map(item => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setFeedback(item.id as any)}
-                    className={`p-3 rounded-xl border text-xs font-semibold flex flex-col items-center gap-1.5 transition ${
-                      feedback === item.id
-                        ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400'
-                        : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <item.icon className="w-4 h-4" />
-                    <span>{item.label}</span>
-                  </button>
-                ))}
+            <div className="mt-5 text-left">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                  Ajuste de Carga por Exercício (Próximo Treino)
+                </label>
+                <span className="text-[10px] text-slate-400">Toque para alterar</span>
               </div>
 
-              <div className="mt-2.5 p-2.5 rounded-xl bg-emerald-500/5 border border-emerald-500/20 text-[11px] text-slate-300 flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>
-                  {feedback === 'muito_facil' &&
-                    'Sobrecarga Progressiva: o sistema aumentará automaticamente suas cargas (+2kg a +4kg) para o próximo ciclo deste treino!'}
-                  {feedback === 'ideal' &&
-                    'Sobrecarga Progressiva: suas cargas máximas atingidas hoje serão salvas com micro-progressão (+1kg a +2kg) no próximo ciclo!'}
-                  {feedback === 'muito_pesado' &&
-                    'Ajuste de Recuperação: o sistema ajustará levemente a carga (-1kg a -2kg) para você consolidar a execução com segurança.'}
-                </span>
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {division.exercicios.map((ex, idx) => {
+                  const diffAtual: ExerciseDifficulty = exerciseFeedbacks[ex.id] || 'ideal';
+                  const { cargaAtual, novaCarga } = calcularNovaCargaExercicio(ex, diffAtual);
+                  const delta = novaCarga - cargaAtual;
+
+                  return (
+                    <div
+                      key={ex.id}
+                      className="p-2.5 rounded-2xl bg-slate-950/90 border border-slate-800 flex flex-col gap-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-white truncate">
+                          {idx + 1}. {ex.nome}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                            delta > 0
+                              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                              : delta < 0
+                              ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                              : 'bg-slate-800 text-slate-300'
+                          }`}
+                        >
+                          {cargaAtual}kg → {novaCarga}kg ({delta > 0 ? `+${delta}kg` : delta < 0 ? `${delta}kg` : 'mantém'})
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {[
+                          { id: 'muito_facil' as ExerciseDifficulty, label: 'Leve (+Carga)', icon: ThumbsDown, active: 'bg-sky-500/15 border-sky-500 text-sky-300' },
+                          { id: 'ideal' as ExerciseDifficulty, label: 'Na Medida', icon: ThumbsUp, active: 'bg-emerald-500/15 border-emerald-500 text-emerald-300' },
+                          { id: 'muito_pesado' as ExerciseDifficulty, label: 'Pesado (-Carga)', icon: Flame, active: 'bg-amber-500/15 border-amber-500 text-amber-300' }
+                        ].map((item) => {
+                          const Icon = item.icon;
+                          const selected = diffAtual === item.id;
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => handleSetExerciseDifficulty(ex.id, item.id)}
+                              className={`py-1.5 px-2 rounded-xl border text-[10px] font-bold flex items-center justify-center gap-1 transition ${
+                                selected
+                                  ? item.active
+                                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              <Icon className="w-3 h-3 shrink-0" />
+                              <span>{item.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -362,7 +437,7 @@ export const StudentWorkoutView: React.FC<StudentWorkoutViewProps> = ({
               />
             </div>
 
-            <div className="mt-6 flex gap-3">
+            <div className="mt-5 flex gap-3">
               <button
                 type="button"
                 onClick={() => setShowFinishModal(false)}

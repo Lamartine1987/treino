@@ -118,10 +118,7 @@ export const StudentAnamnesisView: React.FC<StudentAnamnesisViewProps> = ({ onWo
 
     setLoading(true);
     try {
-      // 1. Atualiza anamnese do aluno no Firestore e estado local
-      await updateAnamnese(formData);
-
-      // 2. Se informou código de professor, vincula
+      // 1. Se informou código de professor, vincula
       if (teacherCode.trim()) {
         const res = await linkStudentToTeacher(user.id, teacherCode.trim());
         if (res.success) {
@@ -129,9 +126,13 @@ export const StudentAnamnesisView: React.FC<StudentAnamnesisViewProps> = ({ onWo
         }
       }
 
-      // 3. Aciona a IA para montar a ficha personalizada
+      // 2. Aciona a IA para montar e salvar a ficha personalizada ANTES de atualizar o estado global user.anamnese,
+      // evitando que o App.tsx desmonte a tela de Anamnese antes do treino estar salvo!
       const workoutPlan = await gerarTreinoComIA(user.nome, user.id, formData);
       await saveWorkoutPlan(workoutPlan);
+
+      // 3. Atualiza anamnese do aluno no Firestore e estado local
+      await updateAnamnese(formData);
 
       onWorkoutGenerated();
     } catch (err) {
@@ -459,19 +460,26 @@ export const StudentAnamnesisView: React.FC<StudentAnamnesisViewProps> = ({ onWo
               <span className="text-xs font-semibold text-slate-300 block mb-2.5">
                 Quantos dias por semana você pode ir à academia?
               </span>
-              <div className="grid grid-cols-5 gap-2">
-                {[2, 3, 4, 5, 6].map(d => (
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                {[
+                  { d: 2, label: '2x' },
+                  { d: 3, label: '3x' },
+                  { d: 4, label: '4x' },
+                  { d: 5, label: '5x' },
+                  { d: 6, label: '6x' },
+                  { d: 7, label: '7x (Todos)' }
+                ].map(({ d, label }) => (
                   <button
                     type="button"
                     key={d}
                     onClick={() => setFormData({ ...formData, diasSemana: d })}
-                    className={`py-3 rounded-xl text-xs sm:text-sm font-bold border transition ${
+                    className={`py-3 px-2 rounded-xl text-xs sm:text-sm font-bold border transition ${
                       formData.diasSemana === d
                         ? 'bg-emerald-500 text-slate-950 border-emerald-500 shadow-md shadow-emerald-500/20'
                         : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
                     }`}
                   >
-                    {d}x
+                    {label}
                   </button>
                 ))}
               </div>
@@ -482,19 +490,26 @@ export const StudentAnamnesisView: React.FC<StudentAnamnesisViewProps> = ({ onWo
                 <Clock className="w-3.5 h-3.5 text-emerald-400" />
                 Tempo médio disponível por treino:
               </span>
-              <div className="grid grid-cols-4 gap-2">
-                {[30, 45, 60, 90].map(t => (
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                {[
+                  { t: 30, label: '30 min' },
+                  { t: 45, label: '45 min' },
+                  { t: 60, label: '60 min' },
+                  { t: 75, label: '75 min' },
+                  { t: 90, label: '90 min' },
+                  { t: 120, label: '120 min (2h)' }
+                ].map(({ t, label }) => (
                   <button
                     type="button"
                     key={t}
                     onClick={() => setFormData({ ...formData, tempoMinutos: t })}
-                    className={`py-3 rounded-xl text-xs sm:text-sm font-bold border transition ${
+                    className={`py-3 px-2 rounded-xl text-xs font-bold border transition ${
                       formData.tempoMinutos === t
                         ? 'bg-emerald-500 text-slate-950 border-emerald-500 shadow-md shadow-emerald-500/20'
                         : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
                     }`}
                   >
-                    {t} min
+                    {label}
                   </button>
                 ))}
               </div>

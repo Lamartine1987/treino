@@ -143,13 +143,15 @@ export async function getUserByEmail(email: string): Promise<UserProfile | null>
  */
 export async function reconcilePreRegisteredStudent(
   realUid: string,
-  email: string
+  email: string,
+  isFreshRegistration = false
 ): Promise<UserProfile | null> {
   const cleanEmail = email.toLowerCase().trim();
   if (!cleanEmail) return null;
 
   let mergedProfile: UserProfile | null = null;
   const legacyIdsToMigrate: string[] = [];
+  const orphanIdsToPurge: string[] = [];
 
   if (isFirebaseConfigured && db) {
     try {
@@ -164,9 +166,27 @@ export async function reconcilePreRegisteredStudent(
         if (d.id === realUid || data.id === realUid) {
           currentDoc = { ...data, id: realUid };
         } else {
-          legacyDocs.push({ ...data, id: d.id });
+          // Só considera como pré-cadastro legítimo se tiver sido criado por um professor (id 'aluno_...' ou tiver professorId)
+          if (!isFreshRegistration || d.id.startsWith('aluno_') || Boolean(data.professorId)) {
+            legacyDocs.push({ ...data, id: d.id });
+          } else {
+            orphanIdsToPurge.push(d.id);
+          }
         }
       });
+
+      // Remove eventuais treinos órfãos no Firestore de contas antigas apagadas que usavam o mesmo e-mail
+      for (const orphanId of orphanIdsToPurge) {
+        try {
+          const qOrphanTreinos = query(collection(db, 'treinos'), where('alunoId', '==', orphanId));
+          const snapOrphan = await getDocs(qOrphanTreinos);
+          for (const tDoc of snapOrphan.docs) {
+            await deleteDoc(doc(db, 'treinos', tDoc.id));
+          }
+        } catch {
+          // Silencioso
+        }
+      }
 
       if (legacyDocs.length > 0) {
         const baseLegacy = legacyDocs[0];
@@ -214,9 +234,34 @@ export async function reconcilePreRegisteredStudent(
   // Reconcilia também no cache local (localStorage)
   const localUsers = getLocal<UserProfile[]>(STORAGE_KEYS.USERS, INITIAL_DEMO_USERS);
   const localCurrent = localUsers.find((u) => u.id === realUid);
-  const localLegacies = localUsers.filter(
+  const allSameEmailLocal = localUsers.filter(
     (u) => u.email.toLowerCase().trim() === cleanEmail && u.id !== realUid
   );
+
+  const localLegacies = allSameEmailLocal.filter(
+    (u) => !isFreshRegistration || u.id.startsWith('aluno_') || Boolean(u.professorId)
+  );
+  const localOrphans = allSameEmailLocal.filter(
+    (u) => isFreshRegistration && !u.id.startsWith('aluno_') && !u.professorId
+  );
+
+  localOrphans.forEach((o) => {
+    if (!orphanIdsToPurge.includes(o.id)) orphanIdsToPurge.push(o.id);
+  });
+
+  // Se for um novo cadastro do zero (sem pré-cadastro de professor), limpa qualquer usuário/treino antigo com mesmo e-mail do localStorage!
+  if (orphanIdsToPurge.length > 0) {
+    const cleanedLocalUsers = localUsers.filter((u) => !orphanIdsToPurge.includes(u.id));
+    setLocal(STORAGE_KEYS.USERS, cleanedLocalUsers);
+
+    const localWorkouts = getLocal<WorkoutPlan[]>(STORAGE_KEYS.WORKOUTS, []);
+    const cleanedWorkouts = localWorkouts.filter((w) => !orphanIdsToPurge.includes(w.alunoId));
+    setLocal(STORAGE_KEYS.WORKOUTS, cleanedWorkouts);
+
+    const localLogs = getLocal<WorkoutLog[]>(STORAGE_KEYS.LOGS, []);
+    const cleanedLogs = localLogs.filter((l) => !orphanIdsToPurge.includes(l.alunoId));
+    setLocal(STORAGE_KEYS.LOGS, cleanedLogs);
+  }
 
   if (localLegacies.length > 0) {
     const baseLeg = localLegacies[0];
@@ -448,4 +493,47 @@ export async function getStudentWorkoutLogs(studentId: string): Promise<WorkoutL
 
   const logs = getLocal<WorkoutLog[]>(STORAGE_KEYS.LOGS, []);
   return logs.filter(l => l.alunoId === studentId);
+}
+
+// ================= CACHE GLOBAL DE IA NO FIRESTORE (ECONOMIA P/ 500+ ALUNOS) =================
+
+export async function getSharedAiPlanFromCloud(
+  signature: string
+): Promise<{ plan: WorkoutPlan; basePesoKg: number } | null> {
+  const safeId = encodeURIComponent(signature).replace(/\./g, '%2E').slice(0, 200);
+  if (isFirebaseConfigured && db) {
+    try {
+      const snap = await getDoc(doc(db, 'ai_plan_cache', safeId));
+      if (snap.exists()) {
+        const data = snap.data() as { plan: WorkoutPlan; basePesoKg: number };
+        if (data && data.plan) return data;
+      }
+    } catch {
+      // Silencioso caso regras de leitura ainda não permitam
+    }
+  }
+  return null;
+}
+
+export async function saveSharedAiPlanToCloud(
+  signature: string,
+  plan: WorkoutPlan,
+  basePesoKg: number
+): Promise<void> {
+  const safeId = encodeURIComponent(signature).replace(/\./g, '%2E').slice(0, 200);
+  if (isFirebaseConfigured && db) {
+    try {
+      await setDoc(
+        doc(db, 'ai_plan_cache', safeId),
+        cleanUndefined({
+          signature,
+          plan,
+          basePesoKg,
+          updatedAt: new Date().toISOString()
+        })
+      );
+    } catch {
+      // Silencioso caso offline
+    }
+  }
 }

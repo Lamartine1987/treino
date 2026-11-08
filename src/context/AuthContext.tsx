@@ -210,9 +210,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       await saveUserProfile(newUser);
 
-      // Se o professor já havia pré-cadastrado este e-mail e criado um treino, unifica tudo automaticamente!
+      // Se o professor já havia pré-cadastrado este e-mail (id 'aluno_...') e criado um treino, unifica!
+      // Mas se for uma conta recém-criada pelo próprio aluno sem vínculo de professor, garante que comece limpa na Anamnese.
       if (role === 'aluno') {
-        const reconciled = await reconcilePreRegisteredStudent(newUser.id, cleanEmail);
+        const reconciled = await reconcilePreRegisteredStudent(newUser.id, cleanEmail, true);
         if (reconciled) {
           Object.assign(newUser, reconciled);
         }

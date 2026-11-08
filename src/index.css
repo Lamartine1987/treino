@@ -27,3 +27,119 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #475569;
 }
+
+/* Animações de Fundo Cinematográficas da Landing Page */
+@keyframes treinoproGridMove {
+  0% {
+    background-position: 0px 0px;
+  }
+  100% {
+    background-position: 0px 64px;
+  }
+}
+
+@keyframes treinoproKenBurns {
+  0% {
+    transform: scale(1) translate(0%, 0%);
+  }
+  50% {
+    transform: scale(1.18) translate(-3%, -2%);
+  }
+  100% {
+    transform: scale(1) translate(0%, 0%);
+  }
+}
+
+@keyframes treinoproBarbellLift {
+  0%, 100% {
+    transform: translateY(18px) scale(0.98);
+  }
+  50% {
+    transform: translateY(-28px) scale(1.03);
+  }
+}
+
+@keyframes treinoproRadarSpin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes treinoproFloatSlow {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-22px) rotate(4deg);
+  }
+}
+
+@keyframes treinoproFloatReverse {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(20px) rotate(-5deg);
+  }
+}
+
+@keyframes treinoproPulseLine {
+  0% {
+    stroke-dashoffset: 1200;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes treinoproOrbDrift {
+  0%, 100% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  33% {
+    transform: translate(60px, -40px) scale(1.15);
+  }
+  66% {
+    transform: translate(-45px, 35px) scale(0.92);
+  }
+}
+
+.animate-grid-flow {
+  background-image: 
+    linear-gradient(to right, rgba(16, 185, 129, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(16, 185, 129, 0.08) 1px, transparent 1px);
+  background-size: 64px 64px;
+  animation: treinoproGridMove 3.5s linear infinite;
+}
+
+.animate-ken-burns {
+  animation: treinoproKenBurns 22s ease-in-out infinite;
+}
+
+.animate-float-slow {
+  animation: treinoproFloatSlow 7s ease-in-out infinite;
+}
+
+.animate-float-reverse {
+  animation: treinoproFloatReverse 8.5s ease-in-out infinite;
+}
+
+.animate-pulse-ecg {
+  stroke-dasharray: 280 920;
+  animation: treinoproPulseLine 5s linear infinite;
+}
+
+.animate-orb-drift {
+  animation: treinoproOrbDrift 14s ease-in-out infinite;
+}
+
+.animate-barbell-lift {
+  animation: treinoproBarbellLift 3.2s ease-in-out infinite;
+}
+
+.animate-radar-spin {
+  animation: treinoproRadarSpin 28s linear infinite;
+}

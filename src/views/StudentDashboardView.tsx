@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { WorkoutPlan, WorkoutDivision, WorkoutLog, UserProfile } from '../types';
 import { getActiveWorkoutPlan, getStudentWorkoutLogs, getUserProfile, saveWorkoutPlan } from '../services/storageService';
-import { evoluirTreinoComIA } from '../services/aiService';
+import { evoluirTreinoComIA, calcularMetaCiclosIdeal } from '../services/aiService';
 import { 
   Play, 
   Dumbbell, 
@@ -37,6 +37,19 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
 
   const handleEvolveWorkout = async () => {
     if (!user || !activePlan || evolving) return;
+
+    const numDivs = Math.max(1, activePlan.divisoes.length);
+    const metaCiclosPlano = activePlan.metaCiclos || calcularMetaCiclosIdeal(user.anamnese, numDivs);
+    const logsFicha = history.filter((l) => l.treinoId === activePlan.id);
+    const ciclosAtuais = Math.floor(logsFicha.length / numDivs);
+
+    if (ciclosAtuais < metaCiclosPlano) {
+      const confirmar = window.confirm(
+        `Você completou ${ciclosAtuais} de ${metaCiclosPlano} ciclos recomendados nesta Fase ${activePlan.fase || 1}.\n\nDeseja realmente antecipar a evolução para a Fase ${(activePlan.fase || 1) + 1} com novos exercícios agora?`
+      );
+      if (!confirmar) return;
+    }
+
     setEvolving(true);
     try {
       const anamnesePadrao = user.anamnese || {
@@ -149,8 +162,8 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
 
   const currentDivision = activePlan.divisoes[selectedDivisionIndex] || activePlan.divisoes[0];
   const faseAtual = activePlan.fase || 1;
-  const metaCiclos = activePlan.metaCiclos || 6;
   const numDivisoes = Math.max(1, activePlan.divisoes.length);
+  const metaCiclos = activePlan.metaCiclos || calcularMetaCiclosIdeal(user?.anamnese, numDivisoes);
   const logsDestaFicha = history.filter((l) => l.treinoId === activePlan.id);
   const totalSessoesFicha = logsDestaFicha.length;
   const ciclosCompletos = Math.floor(totalSessoesFicha / numDivisoes);
@@ -434,35 +447,56 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
             {history.slice(0, 5).map(log => (
               <div
                 key={log.id}
-                className="p-3.5 rounded-2xl bg-slate-950/50 border border-slate-800 flex items-center justify-between"
+                className="p-3.5 rounded-2xl bg-slate-950/50 border border-slate-800 space-y-2"
               >
-                <div>
-                  <div className="font-semibold text-sm text-white">{log.divisaoNome}</div>
-                  <div className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
-                    <span className="flex items-center gap-1">
-                      <Calendar className="w-3 h-3" />
-                      {new Date(log.dataInicio).toLocaleDateString('pt-BR')}
-                    </span>
-                    {log.duracaoMinutos && (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold text-sm text-white">{log.divisaoNome}</div>
+                    <div className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
                       <span className="flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {log.duracaoMinutos} min
+                        <Calendar className="w-3 h-3" />
+                        {new Date(log.dataInicio).toLocaleDateString('pt-BR')}
                       </span>
-                    )}
+                      {log.duracaoMinutos && (
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {log.duracaoMinutos} min
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                      log.feedback === 'ideal' 
+                        ? 'bg-emerald-500/10 text-emerald-400' 
+                        : log.feedback === 'muito_pesado' 
+                          ? 'bg-amber-500/10 text-amber-400' 
+                          : 'bg-indigo-500/10 text-indigo-400'
+                    }`}>
+                      {log.feedback === 'ideal' ? 'Intensidade Ideal' : log.feedback === 'muito_pesado' ? 'Puxado' : 'Leve'}
+                    </span>
                   </div>
                 </div>
 
-                <div className="text-right">
-                  <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
-                    log.feedback === 'ideal' 
-                      ? 'bg-emerald-500/10 text-emerald-400' 
-                      : log.feedback === 'muito_pesado' 
-                        ? 'bg-amber-500/10 text-amber-400' 
-                        : 'bg-indigo-500/10 text-indigo-400'
-                  }`}>
-                    {log.feedback === 'ideal' ? 'Intensidade Ideal' : log.feedback === 'muito_pesado' ? 'Puxado' : 'Leve'}
-                  </span>
-                </div>
+                {log.feedbackPorExercicio && Object.keys(log.feedbackPorExercicio).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1 border-t border-slate-800/70">
+                    {Object.values(log.feedbackPorExercicio).map((item, idx) => (
+                      <span
+                        key={idx}
+                        className={`px-2 py-0.5 rounded-lg text-[10px] font-medium border ${
+                          item.dificuldade === 'muito_facil'
+                            ? 'bg-sky-500/10 border-sky-500/30 text-sky-300'
+                            : item.dificuldade === 'muito_pesado'
+                            ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                            : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+                        }`}
+                      >
+                        {item.nome}: {item.dificuldade === 'muito_facil' ? 'Leve' : item.dificuldade === 'muito_pesado' ? 'Pesado' : 'Na Medida'} ({item.cargaAnteriorKg}→{item.novaCargaKg}kg)
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>

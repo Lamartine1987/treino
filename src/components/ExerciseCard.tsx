@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { Exercise, CompletedSet } from '../types';
+import { Exercise, CompletedSet, ExerciseDifficulty } from '../types';
 import { ExerciseDemo } from './ExerciseDemo';
-import { Check, Info, Shuffle, Dumbbell, PlayCircle, EyeOff } from 'lucide-react';
+import { Check, Info, Shuffle, Dumbbell, PlayCircle, EyeOff, ThumbsDown, ThumbsUp, Flame } from 'lucide-react';
 
 interface ExerciseCardProps {
   exercise: Exercise;
   exerciseIndex: number;
   completedSets: CompletedSet[];
+  difficulty?: ExerciseDifficulty;
+  onChangeDifficulty: (difficulty: ExerciseDifficulty) => void;
   onToggleSet: (setIndex: number, weightKg: number, repsDone: number) => void;
   onTriggerRest: (seconds: number) => void;
 }
@@ -15,6 +17,8 @@ export const ExerciseCard: React.FC<ExerciseCardProps> = ({
   exercise,
   exerciseIndex,
   completedSets,
+  difficulty,
+  onChangeDifficulty,
   onToggleSet,
   onTriggerRest
 }) => {
@@ -61,6 +65,11 @@ export const ExerciseCard: React.FC<ExerciseCardProps> = ({
     // Se estiver marcando como concluída agora, aciona o timer de descanso!
     if (!isAlreadyDone) {
       onTriggerRest(exercise.descansoSegundos || 60);
+      // Se completou a última série e ainda não classificou a dificuldade, sugere 'ideal' como base
+      const doneCountAfter = completedSets.filter(s => s.exerciseId === exercise.id && s.concluido).length + 1;
+      if (doneCountAfter >= exercise.series && !difficulty) {
+        onChangeDifficulty('ideal');
+      }
     }
   };
 
@@ -263,6 +272,71 @@ export const ExerciseCard: React.FC<ExerciseCardProps> = ({
                 </div>
               );
             })}
+          </div>
+
+          {/* Classificação de Dificuldade Individual por Exercício */}
+          <div
+            className={`mt-3 pt-3 border-t transition-all ${
+              isAllDone
+                ? 'border-emerald-500/30 bg-emerald-950/10 -mx-2 px-2 pb-1 rounded-xl'
+                : 'border-slate-800/70'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="text-[11px] text-slate-400">
+                <span className="font-semibold text-slate-300">Como sentiu este exercício?</span>{' '}
+                <span className="text-[10px] text-slate-500">
+                  (Ajusta o peso deste exercício no próximo treino)
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-1.5 sm:w-72">
+                {[
+                  {
+                    id: 'muito_facil' as ExerciseDifficulty,
+                    label: 'Leve',
+                    sub: '+Carga',
+                    icon: ThumbsDown,
+                    activeClass: 'bg-sky-500/15 border-sky-500/50 text-sky-300'
+                  },
+                  {
+                    id: 'ideal' as ExerciseDifficulty,
+                    label: 'Na Medida',
+                    sub: 'Ideal',
+                    icon: ThumbsUp,
+                    activeClass: 'bg-emerald-500/15 border-emerald-500/50 text-emerald-300'
+                  },
+                  {
+                    id: 'muito_pesado' as ExerciseDifficulty,
+                    label: 'Pesado',
+                    sub: '-Carga',
+                    icon: Flame,
+                    activeClass: 'bg-amber-500/15 border-amber-500/50 text-amber-300'
+                  }
+                ].map((opt) => {
+                  const Icon = opt.icon;
+                  const isSelected = difficulty === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => onChangeDifficulty(opt.id)}
+                      className={`px-2 py-1.5 rounded-xl border text-[11px] font-bold flex items-center justify-center gap-1 transition ${
+                        isSelected
+                          ? opt.activeClass
+                          : 'bg-slate-800/60 border-slate-700/70 text-slate-400 hover:text-white hover:border-slate-600'
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5 shrink-0" />
+                      <div className="leading-tight text-left">
+                        <span className="block">{opt.label}</span>
+                        <span className="block text-[9px] opacity-75 font-medium">{opt.sub}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       </div>

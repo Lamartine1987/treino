@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile, WorkoutPlan, WorkoutDivision, Exercise, Anamnesis } from '../types';
 import { getActiveWorkoutPlan, saveWorkoutPlan, saveUserProfile } from '../services/storageService';
-import { gerarTreinoComIA } from '../services/aiService';
+import { gerarTreinoComIA, calcularMetaCiclosIdeal } from '../services/aiService';
 import { EXERCISE_CATEGORIES, EXERCISE_CATALOG, CatalogExercise } from '../data/exerciseCatalog';
 import { 
   Sparkles, 
@@ -56,6 +56,12 @@ export const TeacherWorkoutEditorView: React.FC<TeacherWorkoutEditorViewProps> =
       [field]: value
     };
     setStudentAnamnese(updatedAnamnese);
+    if (plan) {
+      setPlan({
+        ...plan,
+        metaCiclos: calcularMetaCiclosIdeal(updatedAnamnese, plan.divisoes.length)
+      });
+    }
     await saveUserProfile({
       ...student,
       anamnese: updatedAnamnese
@@ -317,8 +323,8 @@ export const TeacherWorkoutEditorView: React.FC<TeacherWorkoutEditorViewProps> =
           </div>
         </div>
 
-        {/* Seletores Diretos para o Professor Editar Objetivo, Dias/Semana, Nível e Tempo */}
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-1">
+        {/* Seletores Diretos para o Professor Editar Objetivo, Dias/Semana, Nível, Tempo e Ciclos */}
+        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 pt-1">
           <div>
             <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
               Objetivo do Aluno
@@ -353,6 +359,7 @@ export const TeacherWorkoutEditorView: React.FC<TeacherWorkoutEditorViewProps> =
               <option value={4}>4 dias/semana</option>
               <option value={5}>5 dias/semana</option>
               <option value={6}>6 dias/semana</option>
+              <option value={7}>7 dias/semana (Todos os dias)</option>
             </select>
           </div>
 
@@ -387,7 +394,27 @@ export const TeacherWorkoutEditorView: React.FC<TeacherWorkoutEditorViewProps> =
               <option value={30}>30 minutos</option>
               <option value={45}>45 minutos</option>
               <option value={60}>60 minutos</option>
-              <option value={90}>90 minutos</option>
+              <option value={75}>75 minutos (1h15)</option>
+              <option value={90}>90 minutos (1h30)</option>
+              <option value={120}>120 minutos (2h)</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
+              Duração da Ficha
+            </label>
+            <select
+              value={plan.metaCiclos || calcularMetaCiclosIdeal(studentAnamnese, plan.divisoes.length)}
+              onChange={(e) => setPlan({ ...plan, metaCiclos: Number(e.target.value) })}
+              className="w-full bg-slate-950 border border-slate-800 hover:border-emerald-500/50 rounded-xl px-3 py-2 text-xs font-bold text-emerald-400 focus:outline-none focus:border-emerald-500"
+            >
+              <option value={4}>4 ciclos (Adaptação)</option>
+              <option value={5}>5 ciclos (Dinâmico)</option>
+              <option value={6}>6 ciclos (Padrão)</option>
+              <option value={7}>7 ciclos (Intermediário+)</option>
+              <option value={8}>8 ciclos (Avançado/Força)</option>
+              <option value={10}>10 ciclos (Longo Prazo)</option>
             </select>
           </div>
         </div>

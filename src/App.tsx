@@ -2,16 +2,20 @@ import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Navbar } from './components/Navbar';
 import { AuthView } from './views/AuthView';
+import { LandingView } from './views/LandingView';
 import { StudentDashboardView } from './views/StudentDashboardView';
 import { StudentAnamnesisView } from './views/StudentAnamnesisView';
 import { StudentWorkoutView } from './views/StudentWorkoutView';
 import { TeacherDashboardView } from './views/TeacherDashboardView';
 import { TeacherWorkoutEditorView } from './views/TeacherWorkoutEditorView';
-import { WorkoutDivision, WorkoutPlan, UserProfile } from './types';
+import { WorkoutDivision, WorkoutPlan, UserProfile, UserRole } from './types';
 
 function MainApp() {
   const { user, loading } = useAuth();
   const [currentView, setCurrentView] = useState<'dashboard' | 'anamnesis' | 'active_workout' | 'teacher_editor' | 'login'>('dashboard');
+  const [showAuthScreen, setShowAuthScreen] = useState(false);
+  const [authInitialRegister, setAuthInitialRegister] = useState(false);
+  const [authInitialRole, setAuthInitialRole] = useState<UserRole>('aluno');
 
   // Estados transitórios para fluxos ativos
   const [activeWorkoutData, setActiveWorkoutData] = useState<{ division: WorkoutDivision; plan: WorkoutPlan } | null>(null);
@@ -25,11 +29,34 @@ function MainApp() {
     );
   }
 
-  // Se não estiver logado, exibe tela de login / cadastro / demo
+  // Se não estiver logado, exibe a Landing Page moderna ou a tela de Login/Cadastro
   if (!user || currentView === 'login') {
+    if (!showAuthScreen && currentView !== 'login') {
+      return (
+        <LandingView
+          onEnterAuth={(opts) => {
+            setAuthInitialRegister(Boolean(opts?.register));
+            setAuthInitialRole(opts?.role || 'aluno');
+            setShowAuthScreen(true);
+          }}
+        />
+      );
+    }
+
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center">
-        <AuthView onSuccess={() => setCurrentView('dashboard')} />
+        <AuthView
+          initialRegister={authInitialRegister}
+          initialRole={authInitialRole}
+          onBackToLanding={() => {
+            setShowAuthScreen(false);
+            setCurrentView('dashboard');
+          }}
+          onSuccess={() => {
+            setShowAuthScreen(false);
+            setCurrentView('dashboard');
+          }}
+        />
       </div>
     );
   }
@@ -79,7 +106,7 @@ function MainApp() {
                 setCurrentView('dashboard');
               }}
             />
-          ) : currentView === 'anamnesis' ? (
+          ) : currentView === 'anamnesis' || (!user.anamnese && !user.professorId) ? (
             <StudentAnamnesisView
               onWorkoutGenerated={() => {
                 setCurrentView('dashboard');

@@ -10,21 +10,30 @@ import {
   Eye, 
   EyeOff, 
   AlertCircle,
-  Loader2
+  Loader2,
+  ArrowLeft
 } from 'lucide-react';
 
 interface AuthViewProps {
   onSuccess: () => void;
+  initialRegister?: boolean;
+  initialRole?: UserRole;
+  onBackToLanding?: () => void;
 }
 
-export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
+export const AuthView: React.FC<AuthViewProps> = ({
+  onSuccess,
+  initialRegister = false,
+  initialRole = 'aluno',
+  onBackToLanding
+}) => {
   const { login, register, loginWithGoogle, switchDemoUser } = useAuth();
-  const [isRegister, setIsRegister] = useState(false);
+  const [isRegister, setIsRegister] = useState(initialRegister);
   const [nome, setNome] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [role, setRole] = useState<UserRole>('aluno');
+  const [role, setRole] = useState<UserRole>(initialRole);
   const [codigoProfessor, setCodigoProfessor] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
@@ -77,6 +86,19 @@ export const AuthView: React.FC<AuthViewProps> = ({ onSuccess }) => {
 
   return (
     <div className="max-w-md w-full mx-auto px-4 py-8">
+      {onBackToLanding && (
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={onBackToLanding}
+            className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-400 hover:text-white flex items-center gap-1.5 transition"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Voltar para a Página Inicial</span>
+          </button>
+        </div>
+      )}
+
       {/* Logo Central */}
       <div className="text-center mb-6">
         <div className="w-16 h-16 rounded-3xl bg-gradient-to-br from-emerald-500 to-teal-700 flex items-center justify-center text-slate-950 shadow-xl shadow-emerald-500/20 mx-auto mb-3">

@@ -306,6 +306,24 @@ export const TeacherDashboardView: React.FC<TeacherDashboardViewProps> = ({
                         {log.seriesConcluidas.filter(s => s.concluido).length} séries concluídas
                       </span>
                     </div>
+                    {log.feedbackPorExercicio && Object.keys(log.feedbackPorExercicio).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-slate-800/80">
+                        {Object.values(log.feedbackPorExercicio).map((item, idx) => (
+                          <span
+                            key={idx}
+                            className={`px-2 py-0.5 rounded-lg text-[10px] font-medium border ${
+                              item.dificuldade === 'muito_facil'
+                                ? 'bg-sky-500/10 border-sky-500/30 text-sky-300'
+                                : item.dificuldade === 'muito_pesado'
+                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                                : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+                            }`}
+                          >
+                            {item.nome}: {item.dificuldade === 'muito_facil' ? 'Leve' : item.dificuldade === 'muito_pesado' ? 'Pesado' : 'Ideal'} ({item.cargaAnteriorKg}→{item.novaCargaKg}kg)
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     {log.observacaoAluno && (
                       <div className="mt-2 p-2 rounded-lg bg-slate-900 text-xs text-amber-200 border border-amber-500/20">
                         "{log.observacaoAluno}"
@@ -383,6 +401,7 @@ export const TeacherDashboardView: React.FC<TeacherDashboardViewProps> = ({
                     <option value={4}>4 dias</option>
                     <option value={5}>5 dias</option>
                     <option value={6}>6 dias</option>
+                    <option value={7}>7 dias (Todos)</option>
                   </select>
                 </div>
               </div>

@@ -1,5 +1,7 @@
 export type UserRole = 'aluno' | 'professor';
 
+export type ExerciseDifficulty = 'muito_facil' | 'ideal' | 'muito_pesado';
+
 export interface Anamnesis {
   objetivo: 'hipertrofia' | 'emagrecimento' | 'forca' | 'condicionamento';
   experiencia: 'iniciante' | 'intermediario' | 'avancado';
@@ -25,6 +27,7 @@ export interface Exercise {
   cargaSugeridaKg?: number;
   cargaAnteriorKg?: number; // Para exibir a evolução automática de carga entre ciclos
   progressaoAplicada?: 'subiu' | 'manteve' | 'reduziu';
+  ultimoFeedback?: ExerciseDifficulty;
   instrucoes?: string;
   exercicioSubstituto?: string; // Alternativa caso aparelho esteja ocupado
   gifUrl?: string; // URL opcional para GIF ou animação do exercício
@@ -70,7 +73,16 @@ export interface WorkoutLog {
   dataInicio: string;
   dataFim?: string;
   duracaoMinutos?: number;
-  feedback?: 'muito_facil' | 'ideal' | 'muito_pesado';
+  feedback?: ExerciseDifficulty;
+  feedbackPorExercicio?: Record<
+    string,
+    {
+      nome: string;
+      dificuldade: ExerciseDifficulty;
+      cargaAnteriorKg: number;
+      novaCargaKg: number;
+    }
+  >;
   observacaoAluno?: string;
   seriesConcluidas: CompletedSet[];
 }
